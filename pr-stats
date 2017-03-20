@@ -1,0 +1,165 @@
+#!/usr/bin/python
+# -*- coding: utf8 -*-
+
+import argparse
+import requests
+from terminaltables import AsciiTable
+from datetime import datetime
+
+
+# Create arguments list
+parser = argparse.ArgumentParser(description='Script to get PR(Pull Request) statistics from GitHub.', prog='pr-stats', usage='%(prog)s [-h | -v | -options] user [-repo REPO] [-prnumber PRNUMBER]')
+parser.add_argument('-v', '--version', action='version', version='ps-stats version 1.0', help="print the program's installed version")
+parser.add_argument('-s', '--stats', action='append_const', const='stats', help='basic statistics about merged/closed rate')
+parser.add_argument('-o', '--opened', action='append_const', const='days_opened', help="number of days opened")
+parser.add_argument('-c', '--comm', action='append_const', const='comm_num', help="number of comments created")
+parser.add_argument('-do', '--dopen', action='append_const', const='day_opened', help="day of the week opened")
+parser.add_argument('-dc', '--dclose', action='append_const', const='day_closed', help="day of the week closed")
+parser.add_argument('-ho', '--hopen', action='append_const', const='hour_opened', help="hour of the day opened")
+parser.add_argument('-hc', '--hclose', action='append_const', const='hour_closed', help="hour of the day opened")
+parser.add_argument('-wo', '--wopen', action='append_const', const='week_opened', help="week opened")
+parser.add_argument('-wc', '--wclose', action='append_const', const='week_closed', help="week closed")
+parser.add_argument('-db', '--dbefore', action='append', help="only consider pull requests opened before this date, ex. YYYY-MM-DD")
+parser.add_argument('-da', '--dafter', action='append', help="option to consider only pull requests opened on or after this date, ex. YYYY-MM-DD")
+parser.add_argument('-uo', '--uopened', action='append_const', const='user_opened', help="user who opened")
+parser.add_argument('-uc', '--uclosed', action='append_const', const='user_closed', help="user who closed")
+parser.add_argument('-l', '--labels', action='append_const', const='labels', help="attached labels")
+parser.add_argument('-la', '--ladded', action='append_const', const='additions', help="number of lines added")
+parser.add_argument('-ld', '--ldeleted', action='append_const', const='deletions', help="number of lines deleted")
+parser.add_argument('user', nargs='+', help='owner of the repository')
+parser.add_argument('-repo', action='append', help='name of the repository')
+parser.add_argument('-prnumber', action='append', help='pull request number')
+
+# Create dict of selected parameters
+args_list = vars(parser.parse_args())
+selected_args = {}
+for i in args_list.keys():
+    if args_list[i] != None:
+        selected_args[i] = ''.join(args_list[i])
+print selected_args
+
+# Credentials for github api access
+auth_user = 'shreben'
+auth_token = "5e574bc7a3d3520cf834955b7a000f1355d5cae4"
+
+# Github api connection
+def api_connect(url):
+    page = 1
+    json_array = []
+    while True:
+        response = requests.get(url + '&page={}'.format(page), auth=(auth_user, auth_token))
+        assert response.status_code == 200
+        if len(response.json()) > 0:
+            for k in response.json():
+                json_array.append(k)
+            page += 1
+        else:
+            break
+    return json_array
+
+# Data output
+def output(titles, data):
+    data.insert(0, titles)
+    return AsciiTable(data).table
+
+# Date processing
+def date_processing(created, closed=None, date_after=None, date_before=None):
+    result = {}
+    def github_to_datetime(github_time):
+        return (github_time.replace('T', ' ')).replace('Z', '')
+
+    if closed:
+        github_time_closed = github_to_datetime(closed)
+        closed_datetime = datetime.strptime(github_time_closed, "%Y-%m-%d %H:%M:%S")
+        result['closed_at'] = closed_datetime
+        result['day_closed'] = {0: 'Monday', 1: 'Tuesday', 2: 'Wednesday', 3: 'Thursday', 4: 'Friday', 5: 'Saturday', 6: 'Sunday'}[closed_datetime.weekday()]
+        result['hour_closed'] = closed_datetime.hour
+        result['week_closed'] = closed_datetime.isocalendar()[1]
+    else:
+        result['closed_at'] = result['day_closed'] = result['hour_closed'] = result['week_closed'] = 'None'
+
+    now = datetime.now()
+    github_time_created = github_to_datetime(created)
+    created_datetime = datetime.strptime(github_time_created, "%Y-%m-%d %H:%M:%S")
+    result['created_at'] = created_datetime
+    result['now'] = now
+    result['day_opened'] = {0:'Monday', 1:'Tuesday', 2:'Wednesday', 3:'Thursday', 4:'Friday', 5:'Saturday', 6:'Sunday'}[created_datetime.weekday()]
+    result['days_opened'] = (now - created_datetime).days
+    result['hour_opened'] = created_datetime.hour
+    result['week_opened'] = created_datetime.isocalendar()[1]
+
+    if date_after:
+        result['date_after'] = datetime.strptime(github_to_datetime(date_after), "%Y-%m-%d")
+    if date_before:
+        result['date_before'] = datetime.strptime(github_to_datetime(date_before), "%Y-%m-%d")
+
+    return result
+
+# Check if repo exists
+if 'repo' not in selected_args.keys():
+    repos_url = "https://api.github.com/users/{}/repos?type=owner".format(selected_args['user'])
+    print "To get pull requests define repository name"
+    print 'Available repositories are:'
+    repos = []
+    for item in api_connect(repos_url):
+        repos.append([item['name'], item['description']])
+    print output(['Name', 'Description'], repos)
+else:
+    # Check if PR number defined
+    if 'prnumber' not in selected_args.keys():
+        pulls_url = "https://api.github.com/repos/{}/{}/pulls?state=all".format(selected_args['user'], selected_args['repo'])
+        print "To get PR stats define PR number:"
+        pulls = []
+        if 'dbefore' in selected_args.keys():
+            for pull_dict in api_connect(pulls_url):
+                date = date_processing(pull_dict['created_at'], pull_dict['closed_at'], selected_args['dbefore'])
+                if date['created_at'] < date['date_before']:
+                    pulls.append([pull_dict['number'], pull_dict['title'], pull_dict['state'], pull_dict['user']['login']])
+            print output(['PR number', 'PR title', 'Status', 'Created by'], pulls)
+
+        elif 'dafter' in selected_args.keys():
+            for pull_dict in api_connect(pulls_url):
+                date = date_processing(pull_dict['created_at'], pull_dict['closed_at'], selected_args['dafter'])
+                if date['created_at'] >= date['date_after']:
+                    pulls.append([pull_dict['number'], pull_dict['title'], pull_dict['state'], pull_dict['user']['login']])
+            print output(['PR number', 'PR title', 'Status', 'Created by'], pulls)
+
+        else:
+            for pull_dict in api_connect(pulls_url):
+                pulls.append([pull_dict['number'], pull_dict['title'], pull_dict['state'], pull_dict['user']['login']])
+            print output(['PR number', 'PR title', 'Status', 'Created by'], pulls)
+
+    else:
+        pulls = []
+        pr_stats_url = "https://api.github.com/repos/{}/{}/pulls/{}".format(selected_args['user'],
+                                                                            selected_args['repo'], selected_args['prnumber'])
+        pull_dict = (requests.get(pr_stats_url, auth=(auth_user, auth_token))).json()
+
+        date = date_processing(pull_dict['created_at'], pull_dict['closed_at'])
+        if pull_dict['state'] == 'closed':
+            print 'Closed processing..'
+            pulls.append([date['days_opened'],'None', date['day_opened'], date['day_closed'], date['hour_opened'],
+                              date['hour_closed'], date['week_opened'], date['week_closed'], pull_dict['user']['login'],
+                              pull_dict['closed_by'], 'None', pull_dict['additions'], pull_dict['deletions']])
+        else:
+            print 'Opened processing..'
+            pulls.append([date['days_opened'], 'None', date['day_opened'], 'None', date['hour_opened'],
+                            'None', date['week_opened'], 'None', pull_dict['user']['login'],
+                              'None', 'None', pull_dict['additions'], pull_dict['deletions']])
+
+        if pull_dict['comments']:
+            print "Inserting comments.."
+            pulls.insert(1, pull_dict['comments'])
+        #if pull_dict['labels']:
+        #    print "Inserting labels.."
+        #    pulls.insert(10, pull_dict['label']['name'])
+
+        params = {'opened':'Days opened', 'comm':'Comments', 'dopen':'Day opened', 'dclose':'Day closed',
+                  'hopen':'Hour opened', 'hclose':'Hour closed', 'wopen':'Week opened', 'wclose':'Week closed',
+                  'uopened':'User opened', 'uclosed':'User closed', 'labels':'Labels', 'ladded':'Lines added',
+                  'ldeleted':'Lines deleted'}
+        title = []
+        for i in selected_args.keys():
+            if i in params.keys():
+                title.append(params[i])
+        print output(title, pulls)
